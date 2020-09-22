@@ -1,0 +1,4 @@
+@main {
+    v: int = const 4;
+	k: int = id v;
+}
