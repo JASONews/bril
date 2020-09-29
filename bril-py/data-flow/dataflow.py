@@ -52,8 +52,10 @@ def worklist_run(cfg, analysis_type="define"):
     blocks = cfg['blocks']
 
     defines = {}
+    uses = {}
     entry = {}
     out = {}
+    out_uses = {}
     worklist = []
     successors = cfg['cfg']
     predessors = {}
@@ -61,6 +63,7 @@ def worklist_run(cfg, analysis_type="define"):
 
     for name, block in blocks.items():
         definitions = set()
+        local_uses = set()
         predessors[name] = []
 
         for instr in block:
@@ -76,15 +79,24 @@ def worklist_run(cfg, analysis_type="define"):
                     definitions.add("{}#{}".format(dest, define_count[dest]))
                 else:
                     definitions.add(dest)
+            
+            if 'args' in instr:
+                local_uses.update(instr['args'])
 
         entry[name] = set()
-        out[name] = definitions
+        out[name] = definitions 
+        uses[name] = local_uses
         defines[name] = definitions
+        out_uses[name] = local_uses
         worklist.append(name)
 
     predessors = build_predecessors(cfg['cfg'], predessors)
 
-    worklist_forward(worklist, entry, out, defines, predessors, successors, analysis_type=analysis_type)
+    if analysis_type == "live":
+        worklist_backward(worklist, entry, out, uses, predessors, successors, analysis_type)
+        pass
+    else:
+        worklist_forward(worklist, entry, out, defines, predessors, successors, analysis_type=analysis_type)
 
     print_analysis(blocks.keys(), entry, out)
 
@@ -97,6 +109,15 @@ def worklist_forward(worklist, entry, out, defines, preds, succ, analysis_type):
         if out[b_name] != new_out:
             worklist += list(succ[b_name])
             out[b_name] = new_out
+
+def worklist_backward(worklist, entry, out, uses, preds, succ, analysis_type):
+    while worklist:
+        b_name = worklist.pop()
+        out[b_name] = merge(b_name, succ[b_name], entry)
+        new_entry = transfer(uses[b_name], out[b_name], analysis_type=analysis_type)
+        if entry[b_name] != new_entry:
+            worklist += list(preds[b_name])
+            entry[b_name] = new_entry
 
 def print_analysis(names, entry, out):
     for name in names:
@@ -116,6 +137,5 @@ def main(fd):
 
 
 if __name__ == "__main__":
-    print(sys.argv)
     main(sys.stdin)
     
