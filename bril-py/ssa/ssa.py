@@ -1,0 +1,93 @@
+import sys
+
+import cfg as m_cfg
+
+class DomTreeNode:
+
+    def __init__(self, name):
+        self.children = []
+        self.name = name
+    
+    def __repr__(self):
+        return "{}: {}".format(self.name, self.children)
+
+def build_dominating_tree(dominators):
+
+    entry = None
+
+    dom = dict(dominators)
+
+    for name in dom:
+        dom[name] = set(dom[name])
+        if len(dom[name]) == 1:
+            entry = DomTreeNode(name)
+            
+    del dom[entry.name]
+    q = [entry]
+
+    dom_tree = {}
+    dom_tree[entry.name] = entry
+
+    while dom:
+        
+        parent = q.pop(0)
+        keys = set(dom.keys())
+
+        for name in keys:
+
+            dom[name].remove(parent.name)
+
+            if len(dom[name]) == 1:
+                node = DomTreeNode(name)
+                parent.children.append(node)
+                # add to bfs queue
+                q.append(node)
+                dom_tree[name] = node
+                # remove it from dom to make loop converged
+                del dom[name]
+    
+    print(dom_tree)
+    return entry
+
+
+def find_dominators(predecessors, successors):
+
+    dominators = {}
+
+    for name in predecessors:
+        dominators[name] = set(predecessors.keys())
+    
+    changed = True
+
+    while changed: # loop until no changes in dominators map
+        changed = False
+        
+        for name in dominators:
+            next_dominator = set()
+            
+            for pred in predecessors[name]:
+                next_dominator = set(dominators[pred]) if not next_dominator else next_dominator.intersection(dominators[pred])
+            
+            next_dominator.add(name)
+
+            if next_dominator != dominators[name]:
+                changed = True
+                dominators[name] = next_dominator
+    
+    return dominators
+
+
+def main(fd):
+
+    cfgs = m_cfg.make_cfg(fd)
+
+    for fn, cfg in cfgs.items():
+        print("function: {}", fn)
+        predecessors = cfg['predecessors']
+        successors = cfg['successors']
+        dom = find_dominators(predecessors, successors)
+        build_dominating_tree(dom)
+
+
+if __name__ == "__main__":
+    main(sys.stdin)
