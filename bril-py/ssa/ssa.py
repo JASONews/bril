@@ -1,5 +1,6 @@
 import sys
 import json
+from collections import OrderedDict
 
 import cfg as m_cfg
 
@@ -26,7 +27,7 @@ def build_dominating_tree(dominators):
 
     entry = None
 
-    dom = dict(dominators)
+    dom = OrderedDict(dominators)
 
     for name in dom:
         dom[name] = set(dom[name])
@@ -42,7 +43,7 @@ def build_dominating_tree(dominators):
     while dom:
         
         parent = q.pop(0)
-        keys = set(dom.keys())
+        keys = list(dom.keys())
 
         for name in keys:
 
@@ -57,7 +58,6 @@ def build_dominating_tree(dominators):
                 # remove it from dom to make loop converged
                 del dom[name]
     
-    # print("Dominance Tree: ", dom_tree)
     return entry, dom_tree
 
 
@@ -92,8 +92,6 @@ def find_dominance_frointer(root: DomTreeNode, successors):
     dominated_nodes = root.childrenSet()
     frontier = set()
 
-    # print(dominated_nodes)
-
     q = []
     q.append(root)
 
@@ -107,17 +105,17 @@ def find_dominance_frointer(root: DomTreeNode, successors):
         for child in node.children:
             q.append(child)
 
-    # print("frontier for {}: {}".format(root.name, frontier))
     return frontier
 
 
 def insert_phi_node(block, var_name, var_type):
     if not block or 'phi' not in block[0]:
         block.insert(0, {"phi": {}})
-    block[0]["phi"][var_name] = {'type': var_type, 'dest': var_name, 'args': [], 'labels': []}
+    block[0]["phi"][var_name] = {'type': var_type, 'dest': var_name, 'args': [], 'labels': [], 'missing': {}}
 
 
 def flatten_phi_node(block):
+
     if block and 'phi' in block[0]:
         phi_nodes = block.pop(0)['phi']
 
@@ -155,6 +153,7 @@ def to_ssa(blocks, dominators, successors, function_args):
 
         _def_blocks = list(def_blocks)
 
+
         while _def_blocks:
 
             block_name = _def_blocks.pop()
@@ -178,9 +177,6 @@ def to_ssa(blocks, dominators, successors, function_args):
 
     for arg in function_args:
         arg['name'] = var_stacks[arg['name']][-1]
-
-    # print(var_numbers)
-    # print(var_stacks)
 
     visited = set()
 
@@ -207,6 +203,7 @@ def to_ssa(blocks, dominators, successors, function_args):
             
             if "dest" in instr:
                 var_name = instr["dest"]
+                
                 var_numbers[var_name] += 1
                 var_stacks[var_name].append("{}.{}".format(var_name, var_numbers[var_name]))
                 instr['dest'] = var_stacks[var_name][-1]
@@ -214,6 +211,7 @@ def to_ssa(blocks, dominators, successors, function_args):
 
             if "phi" in instr:
                 for var_name in instr['phi']:
+
                     var_numbers[var_name] += 1
                     var_stacks[var_name].append("{}.{}".format(var_name, var_numbers[var_name]))
                     instr['phi'][var_name]['dest'] = var_stacks[var_name][-1]
@@ -224,8 +222,8 @@ def to_ssa(blocks, dominators, successors, function_args):
             successor_block = blocks[successor]
 
             if "phi" in successor_block[0]:
-                for var_name in pushed_count:
-                    if var_name in successor_block[0]['phi']:
+                for var_name in successor_block[0]['phi']:
+                    if var_stacks[var_name][-1] != var_name: # if the variable has been defined.
                         phi = successor_block[0]['phi'][var_name]
                         phi['args'].append(var_stacks[var_name][-1])
                         phi['labels'].append(block_name)
@@ -238,25 +236,47 @@ def to_ssa(blocks, dominators, successors, function_args):
                 var_stacks[var_name].pop()
                 count -= 1
 
-        # print(var_stacks)
-
     rename(entry)
 
     for name, block in blocks.items():
-        # print(name)
         flatten_phi_node(block)
 
-def to_function(function_name, function_args, blocks):
+
+def out_ssa(blocks):
+
+    _blocks = {} # label -> {label.name -> block}
+
+    for name, block in blocks.items():
+        while block[0]['op'] == 'phi':
+            instr = block.pop(0)
+            for label, var_name in zip(instr['labels'], instr['args']):
+                label_name = label + "." + name
+                _blocks.setdefault(label, {})
+                _blocks[label].setdefault(label_name, [{'op': 'jmp', 'labels': [name]}])
+                _blocks[label][label_name].insert(-1, ({"op": 'id', 'dest': instr['dest'], 'args': [var_name]}))
+                last_instr = blocks[label][-1]
+                if 'labels' in last_instr:
+                    last_instr['labels'] = [ l if l != name else label_name for l in last_instr['labels']]
+            
+    return _blocks
+
+    
+def to_function(function_name, function_args, blocks, inserted_blocks=None):
     function = {'args': function_args, 'name': function_name, 'instrs' : []}
     for label, block in blocks.items():
         function['instrs'].append({'label': label})
         function['instrs'] += block
+        if inserted_blocks and label in inserted_blocks and inserted_blocks[label]:
+            for mid_label, mid_block in inserted_blocks[label].items():
+                function['instrs'].append({'label': mid_label})
+                function['instrs'] += mid_block
+
     return function
     
 
 def main(fd):
 
-    cfgs, program = m_cfg.make_cfg(fd)
+    cfgs, _ = m_cfg.make_cfg(fd)
     optimized_program = {"functions": []}
 
     for fn, cfg in cfgs.items():
@@ -266,7 +286,11 @@ def main(fd):
         dom = find_dominators(predecessors, successors)
         to_ssa(cfg['blocks'], dom, successors, cfg['args'])
 
-        optimized_program['functions'].append(to_function(fn, cfg['args'], cfg['blocks']))
+        if len(sys.argv) == 2 and sys.argv[1] == 'phi':
+            optimized_program['functions'].append(to_function(fn, cfg['args'], cfg['blocks']))
+        else:
+            mid_blocks = out_ssa(cfg['blocks'])
+            optimized_program['functions'].append(to_function(fn, cfg['args'], cfg['blocks'], mid_blocks))
         
     json.dump(optimized_program, sys.stdout)
 
