@@ -11,6 +11,15 @@ class DomTreeNode:
     def __repr__(self):
         return "{}: {}".format(self.name, self.children)
 
+    def childrenSet(self):
+        cs = set()
+        cs.add(self.name)
+
+        for child in self.children:
+            cs |= child.childrenSet()
+        
+        return cs
+
 def build_dominating_tree(dominators):
 
     entry = None
@@ -35,7 +44,7 @@ def build_dominating_tree(dominators):
 
         for name in keys:
 
-            dom[name].remove(parent.name)
+            dom[name].discard(parent.name)
 
             if len(dom[name]) == 1:
                 node = DomTreeNode(name)
@@ -46,8 +55,8 @@ def build_dominating_tree(dominators):
                 # remove it from dom to make loop converged
                 del dom[name]
     
-    print(dom_tree)
-    return entry
+    # print("Dominance Tree: ", dom_tree)
+    return entry, dom_tree
 
 
 def find_dominators(predecessors, successors):
@@ -77,16 +86,42 @@ def find_dominators(predecessors, successors):
     return dominators
 
 
+
+def find_dominance_frointer(root: DomTreeNode, successors):
+    dominated_nodes = root.childrenSet()
+    frontier = set()
+
+    # print(dominated_nodes)
+
+    q = []
+    q.append(root)
+
+    while q:
+        node = q.pop(0)
+        
+        for child in successors[node.name]:
+            if child not in dominated_nodes:
+                frontier.add(child)
+        
+        for child in node.children:
+            q.append(child)
+
+    # print("frontier for {}: {}".format(root.name, frontier))
+    return frontier
+
+
 def main(fd):
 
     cfgs = m_cfg.make_cfg(fd)
 
     for fn, cfg in cfgs.items():
-        print("function: {}", fn)
+        # print("function: {}", fn)
         predecessors = cfg['predecessors']
         successors = cfg['successors']
+
         dom = find_dominators(predecessors, successors)
-        build_dominating_tree(dom)
+        root, tree = build_dominating_tree(dom)
+        find_dominance_frointer(tree['header'], successors)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 # ARGS: live
 
-@main {
+@main(arg: int) {
   result: int = const 1;
   i: int = const 8;
+  ex: bool = eq arg i;
+  br ex .header .end;
 
 .header:
   # Enter body if i >= 0.
