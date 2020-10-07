@@ -2,11 +2,12 @@
 
 @main(arg: int) {
   result: int = const 1;
-  i: int = const 8;
+  i: int = id arg;
+  ten: int = const 10;
 
 .test:
-  ex: bool = eq arg i;
-  br ex .header .end;
+  isLT10: bool = lt i ten;
+  br isLT10 .header .end;
 
 .header:
   # Enter body if i >= 0.
@@ -24,6 +25,5 @@
   jmp .header;
 
 .end:
-  x: int = phi .header zero .test i;
   print result;
 }
