@@ -1,4 +1,5 @@
 import sys
+import json
 
 import cfg as m_cfg
 
@@ -19,6 +20,7 @@ class DomTreeNode:
             cs |= child.childrenSet()
         
         return cs
+
 
 def build_dominating_tree(dominators):
 
@@ -86,7 +88,6 @@ def find_dominators(predecessors, successors):
     return dominators
 
 
-
 def find_dominance_frointer(root: DomTreeNode, successors):
     dominated_nodes = root.childrenSet()
     frontier = set()
@@ -110,18 +111,165 @@ def find_dominance_frointer(root: DomTreeNode, successors):
     return frontier
 
 
+def insert_phi_node(block, var_name, var_type):
+    if not block or 'phi' not in block[0]:
+        block.insert(0, {"phi": {}})
+    block[0]["phi"][var_name] = {'type': var_type, 'dest': var_name, 'args': [], 'labels': []}
+
+
+def flatten_phi_node(block):
+    if block and 'phi' in block[0]:
+        phi_nodes = block.pop(0)['phi']
+
+        for var_name in phi_nodes:
+            phi = phi_nodes[var_name]
+            block.insert(0, {'op': 'phi', 'dest': phi['dest'], 'type': phi['type'],
+             'args': phi['args'], 'labels': phi['labels']})
+
+
+def find_variable_definitions(blocks):
+    defs = {}
+
+    for name, block in blocks.items():
+        for instr in block:
+            if 'dest' in instr:
+                defs.setdefault(instr['dest'], {'blocks': set(), 'type': instr['type']})
+                defs[instr['dest']]['blocks'].add(name)
+
+    return defs
+
+def to_ssa(blocks, dominators, successors, function_args):
+
+    defs = find_variable_definitions(blocks)
+
+    for arg in function_args:
+        if arg['name'] not in defs:
+            defs[arg['name']] = {'blocks': set(), 'type': arg['type']}
+
+    entry, tree = build_dominating_tree(dominators)
+
+    # insert phi nodes at dominance frontier
+    for v, val in defs.items():
+
+        def_blocks = val['blocks']
+
+        _def_blocks = list(def_blocks)
+
+        while _def_blocks:
+
+            block_name = _def_blocks.pop()
+            frontier_blocks = find_dominance_frointer(tree[block_name], successors)
+
+            for b_name in frontier_blocks:
+                insert_phi_node(blocks[b_name], v, val['type'])
+                if b_name not in def_blocks:
+                    def_blocks.add(b_name)
+                    _def_blocks.append(b_name)
+
+
+    # rename
+
+    var_numbers = {}
+    var_stacks = {}
+
+    for var_name in defs:
+        var_stacks.setdefault(var_name, [var_name])
+        var_numbers.setdefault(var_name, 0)
+
+    for arg in function_args:
+        arg['name'] = var_stacks[arg['name']][-1]
+
+    # print(var_numbers)
+    # print(var_stacks)
+
+    visited = set()
+
+    def rename(root):
+
+        block_name = root.name
+
+        if block_name in visited:
+            return
+        else:
+            visited.add(block_name)
+
+        block = blocks[block_name]
+
+        pushed_count = {}
+
+        for instr in block:
+            if "args" in instr:
+                args = []
+                old_args = instr["args"]
+                while old_args:
+                    args.append(var_stacks[old_args.pop()][-1])
+                instr["args"] = args[::-1]
+            
+            if "dest" in instr:
+                var_name = instr["dest"]
+                var_numbers[var_name] += 1
+                var_stacks[var_name].append("{}.{}".format(var_name, var_numbers[var_name]))
+                instr['dest'] = var_stacks[var_name][-1]
+                pushed_count[var_name] = pushed_count.get(var_name, 0) + 1
+
+            if "phi" in instr:
+                for var_name in instr['phi']:
+                    var_numbers[var_name] += 1
+                    var_stacks[var_name].append("{}.{}".format(var_name, var_numbers[var_name]))
+                    instr['phi'][var_name]['dest'] = var_stacks[var_name][-1]
+                    pushed_count[var_name] = pushed_count.get(var_name, 0) + 1
+ 
+
+        for successor in successors[block_name]:
+            successor_block = blocks[successor]
+
+            if "phi" in successor_block[0]:
+                for var_name in pushed_count:
+                    if var_name in successor_block[0]['phi']:
+                        phi = successor_block[0]['phi'][var_name]
+                        phi['args'].append(var_stacks[var_name][-1])
+                        phi['labels'].append(block_name)
+                    
+        for child in root.children:
+            rename(child)
+
+        for var_name, count in pushed_count.items():
+            while count > 0:
+                var_stacks[var_name].pop()
+                count -= 1
+
+        # print(var_stacks)
+
+    rename(entry)
+
+    for name, block in blocks.items():
+        # print(name)
+        flatten_phi_node(block)
+
+def to_function(function_name, function_args, blocks):
+    function = {'args': function_args, 'name': function_name, 'instrs' : []}
+    for label, block in blocks.items():
+        function['instrs'].append({'label': label})
+        function['instrs'] += block
+    return function
+    
+
 def main(fd):
 
-    cfgs = m_cfg.make_cfg(fd)
+    cfgs, program = m_cfg.make_cfg(fd)
+    optimized_program = {"functions": []}
 
     for fn, cfg in cfgs.items():
-        # print("function: {}", fn)
         predecessors = cfg['predecessors']
         successors = cfg['successors']
 
         dom = find_dominators(predecessors, successors)
-        root, tree = build_dominating_tree(dom)
-        find_dominance_frointer(tree['header'], successors)
+        to_ssa(cfg['blocks'], dom, successors, cfg['args'])
+
+        optimized_program['functions'].append(to_function(fn, cfg['args'], cfg['blocks']))
+        
+    json.dump(optimized_program, sys.stdout)
+
 
 
 if __name__ == "__main__":

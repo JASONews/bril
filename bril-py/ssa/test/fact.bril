@@ -22,5 +22,6 @@
   jmp .header;
 
 .end:
+  x: int = phi .header zero .body i;
   print result;
 }

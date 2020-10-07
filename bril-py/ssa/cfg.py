@@ -89,8 +89,9 @@ def make_cfg(fd):
         cfgs[function['name']]['successors'] = successors
         cfgs[function['name']]['predecessors'] = predecessors
         cfgs[function['name']]['blocks'] = named_block
+        cfgs[function['name']]['args'] = function['args']
 
-    return cfgs
+    return cfgs, program
 
 def togGraphviz(func, cfg):
     print ("digraph {} {{".format(func))
